@@ -1,0 +1,96 @@
+# koreader-stats-template
+
+Template for turning a KOReader `statistics.sqlite3` into readable markdown: what you read per
+month and per year, how fast you read it, a Wrapped-style recap, and which volumes of your series
+have come out since. Click **Use this template** on GitHub to start your own copy; it contains
+none of the author's data. The author's own repo is [my_koreader_stats](https://github.com/Punllarena/my_koreader_stats).
+
+Your database and generated stats are gitignored by default, so a public copy of this repo won't
+publish your reading history. Remove those lines from `.gitignore` if you want to commit them.
+
+## Usage
+
+Copy `statistics.sqlite3` out of your KOReader device (`koreader/settings/statistics.sqlite3`)
+into this directory, then:
+
+```sh
+./regen.sh                  # rebuild everything under stats/
+python3 scripts/wrapped.py  # or run a single generator, from any directory
+```
+
+Python 3 only, no dependencies. `scripts/updates.py` queries [RanobeDB](https://ranobedb.org)
+over HTTP and caches every response in `.ranobedb_cache.json`; delete that file to refresh.
+
+## Layout
+
+```
+regen.sh              run every generator
+statistics.sqlite3    the KOReader database, copied off the device (you add this; gitignored)
+scripts/              the generators, plus paths.py, titles.py and toc.py
+stats/                everything generated (starts empty)
+tests/                self-checks
+```
+
+| Script | Output |
+| --- | --- |
+| `scripts/monthly.py` | `stats/monthly/YYYY-MM.md` — titles read that month, read time, last read date, reading days and longest streak |
+| `scripts/yearly.py` | `stats/yearly/YYYY.md` — titles read that year with read time and totals |
+| `scripts/book_dates.py` | `stats/book_dates.md` — first and last read date per volume, grouped by series |
+| `scripts/pace.py` | `stats/pace.md` — pages/hour overall, per year and per book; heaviest days and longest sittings; how long each book took start to finish |
+| `scripts/wrapped.py` | `stats/wrapped.md` — a Wrapped-style recap per year and quarter, each ending in a one-line caption to paste |
+| `scripts/updates.py` | `stats/updates_by_series.md`, `stats/updates_by_month.md` — volumes newer than the ones read, per RanobeDB (English releases) |
+| `scripts/sync_ranobedb.py`, `sync_ranobedb_auto.py` | update your RanobeDB reading list, asking or not (not part of `regen.sh`, see below) |
+
+`scripts/paths.py` holds every path, `scripts/titles.py` parses KOReader titles into a series
+and volume number, and `scripts/toc.py` adds a table of contents to each generated file.
+
+## Syncing to RanobeDB
+
+`scripts/sync_ranobedb.py` sets each volume's status and dates on your RanobeDB list. Create a
+personal access token in your RanobeDB settings, copy `.env.example` to `.env` (gitignored) and put the
+token in `RANOBEDB_TOKEN`.
+
+```sh
+python3 scripts/sync_ranobedb.py          # dry run: asks you to match volumes, prints what it would send
+python3 scripts/sync_ranobedb.py --apply  # actually send
+python3 scripts/sync_ranobedb_auto.py     # never asks, sends straight away (--dry-run to preview)
+```
+
+- **Finished** means the furthest page reached is at least 90% of the book **and** at least half of its
+  pages were viewed (so paging to the end of a book you never read doesn't count). Anything else is
+  **Reading**. `started` is the first read date, `finished` the last. Stalled/Dropped/Plan to read are never sent.
+- Each volume is matched to a RanobeDB book once, by you; the choice (or "skip") is remembered in
+  `.ranobedb_sync.json` along with what was last sent, so unchanged volumes are not re-sent.
+- `sync_ranobedb_auto.py` is the no-prompt version for scheduled runs. It only matches a volume when exactly
+  one search hit has the same series and volume number; the rest are counted as unmatched and left for
+  the interactive script.
+- To keep a score, notes or labels across syncs, add `"score"`, `"notes"` or `"selectedCustLabels"`
+  to that volume's entry in `.ranobedb_sync.json`.
+
+**Risk:** RanobeDB's API replaces the whole list entry on every update and has no way to read the
+existing one back. If a book is already on your list with a score, notes or custom labels, the first
+sync clears them. Add them to `.ranobedb_sync.json` first, or only run this on a list you're happy to
+have overwritten. See `ranobedb-user-api-guide.md` for the API details.
+
+## Checks
+
+```sh
+for t in tests/test_*.py; do python3 "$t"; done
+python3 scripts/toc.py   # the TOC self-check lives with the module
+```
+
+## How `updates.py` decides what is unread
+
+KOReader titles are messy, so matching happens in a few steps:
+
+1. Titles are normalized — trailing parentheticals, export filenames
+   (`<timestamp> <authors> - Title_`) and volume suffixes are stripped.
+2. The series is looked up on RanobeDB, accepting a hit whose title is a prefix of ours or
+   vice versa, after lowercasing and dropping accents and punctuation.
+3. A RanobeDB book counts as read when its number is not above the highest volume read **or**
+   its title matches a book read. The title check matters because one number can cover several
+   books (`Vol. 7 Exordium` / `Vol. 7 Finale`).
+4. Everything after that point is reported, labelled with the book's own volume title — RanobeDB
+   sort order counts side stories and untranslated volumes, so it is not the volume number.
+
+Series that never matched are listed under "Not found on RanobeDB" at the end of both files.
